@@ -643,7 +643,7 @@ static int tmd750_open(RIG *rig)
     /* Start on the band the radio transmits on. */
     if (tmd750_get_bands(rig, &ctrl, &ptt) == RIG_OK)
     {
-        STATE(rig)->current_vfo = ptt ? RIG_VFO_B : RIG_VFO_A;
+        rig_set_current_vfo_state(rig, ptt ? RIG_VFO_B : RIG_VFO_A);
     }
 
     return RIG_OK;
