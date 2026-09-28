@@ -122,7 +122,7 @@ static int emulate(int master, int control)
     int mode[2] = { 0, 0 }, power[2] = { 0, 0 }, squelch[2] = { 5, 5 };
     int gain[2] = { 100, 100 }, busy[2] = { 0, 1 }, signal[2] = { 0, 7 };
     int vm[2] = { 0, 1 }, mr[2] = { 0, 54 };
-    char att[2] = { 'F', 'F' };  /* F until first switched */
+    char att[2] = { 'F', 'F' };  /* F as observed on the radio while off */
     int ctrl = 1, ptt = 0, keyed = 0, vox = 0, vox_gain = 4, vox_delay = 1;
     int fo_in_memory_mode = 0;
 
@@ -543,7 +543,7 @@ int main(void)
                        "set band B volume");
     failures += expect(rig_get_level(rig, RIG_VFO_B, RIG_LEVEL_ATT, &value) == RIG_OK
                        && value.i == 0,
-                       "read an attenuator never switched (F) as off");
+                       "read F as attenuator off");
     failures += expect(rig_set_level(rig, RIG_VFO_B, RIG_LEVEL_ATT,
                                      (value_t){ .i = 3 }) == RIG_OK
                        && rig_get_level(rig, RIG_VFO_B, RIG_LEVEL_ATT, &value) == RIG_OK

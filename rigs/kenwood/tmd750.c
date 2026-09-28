@@ -41,8 +41,8 @@
  *  PC b / PC b,n          power: 0 high, 1 medium, 2 low.
  *  AG b / AG b,nnn        volume, 000 to 200, always three digits.
  *  VX, VG, VD             VOX on/off, gain 0 to 9, delay 0 to 6.
- *  RA b / RA b,v          attenuator 0 off, 1 on. Reads F until it is
- *                         first switched, which is off.
+ *  RA b / RA b,v          attenuator 0 off, 1 on. F has been seen while
+ *                         off and is read as off.
  */
 
 #include <inttypes.h>
