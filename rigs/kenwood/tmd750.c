@@ -41,10 +41,6 @@
  *  PC b / PC b,n          power: 0 high, 1 medium, 2 low.
  *  AG b / AG b,nnn        volume, 000 to 200, always three digits.
  *  VX, VG, VD             VOX on/off, gain 0 to 9, delay 0 to 6.
- *
- * Selecting a VFO here never sends BC: every command names its band, so the
- * operator's operating and PTT bands stay where they are. PTT is refused
- * unless the radio's PTT band is the requested VFO.
  */
 
 #include <inttypes.h>
@@ -63,6 +59,7 @@
 
 #define TMD750_MODES (RIG_MODE_FM|RIG_MODE_FMN|RIG_MODE_AM|RIG_MODE_DSTAR)
 #define TMD750_MODES_TX (RIG_MODE_FM|RIG_MODE_FMN|RIG_MODE_DSTAR)
+#define TMD750_MODES_ANALOG (RIG_MODE_FM|RIG_MODE_FMN|RIG_MODE_AM)
 
 #define TMD750_FUNC_ALL (RIG_FUNC_TONE|RIG_FUNC_TSQL|RIG_FUNC_VOX)
 
@@ -160,12 +157,12 @@ static struct kenwood_priv_caps tmd750_priv_caps =
 /* One FO or ME record, fields in the order the radio sends them. */
 struct tmd750_record
 {
-    int is_memory;              /* not sent: ME record rather than FO */
+    int is_memory;              /* 1 for an ME record, 0 for FO; not sent */
     unsigned int number;        /* FO: band, 1 digit; ME: channel, 3 digits */
-    uint64_t frequency_hz;      /* 10 digits */
-    uint64_t offset_hz;         /* 10 digits; ME split channel: TX frequency */
+    uint64_t frequency_hz;      /* Hz, 10 digits */
+    uint64_t offset_hz;         /* Hz, 10 digits; ME split channel: TX frequency */
     char rx_step;               /* step code 0-C; SF reports this one */
-    char tx_step;               /* step code 0-C; only matters on a split ME */
+    char tx_step;               /* step code 0-C; stored by the radio, kept as read */
     uint8_t mode;               /* MD code */
     uint8_t tone_enabled;
     uint8_t ctcss_enabled;
@@ -1722,6 +1719,11 @@ static int tmd750_set_channel(RIG *rig, vfo_t vfo, const channel_t *chan)
         record.rx_step = tmd750_default_step(record.frequency_hz);
     }
 
+    if (is_new)
+    {
+        record.tx_step = record.rx_step;
+    }
+
     if (chan->split == RIG_SPLIT_ON)
     {
         /* Split channels pair bands only within one band or 144 with 430 MHz. */
@@ -1736,18 +1738,11 @@ static int tmd750_set_channel(RIG *rig, vfo_t vfo, const channel_t *chan)
         record.odd_split_enabled = 1;
         record.offset_hz = (uint64_t)llround(chan->tx_freq);
         record.shift = 0;
-
-        if (is_new || tmd750_default_step(record.offset_hz)
-                != tmd750_default_step(record.frequency_hz))
-        {
-            record.tx_step = tmd750_default_step(record.offset_hz);
-        }
     }
     else
     {
         record.odd_split_enabled = 0;
         record.offset_hz = (uint64_t)chan->rptr_offs;
-        record.tx_step = record.rx_step;
 
         switch (chan->rptr_shift)
         {
@@ -1861,14 +1856,18 @@ struct rig_caps tmd750_caps =
         { 0, 999, RIG_MTYPE_MEM, {TMD750_CHANNEL_CAPS}},
         RIG_CHAN_END,
     },
-    /* TM-D750E. Band B also receives 174-410 and 470-524 MHz. */
+    /* TM-D750E. Band B also receives 174-410 and 470-524 MHz. DV/DR only in the ham bands. */
     .rx_range_list1 =
     {
         {MHz(108), MHz(137), RIG_MODE_AM, -1, -1, TMD750_VFO},
-        {MHz(137), MHz(174), TMD750_MODES, -1, -1, TMD750_VFO},
-        {MHz(410), MHz(470), TMD750_MODES, -1, -1, TMD750_VFO},
-        {MHz(174), MHz(410), TMD750_MODES, -1, -1, RIG_VFO_B},
-        {MHz(470), MHz(524), TMD750_MODES, -1, -1, RIG_VFO_B},
+        {MHz(137), MHz(144), TMD750_MODES_ANALOG, -1, -1, TMD750_VFO},
+        {MHz(144), MHz(146), TMD750_MODES, -1, -1, TMD750_VFO},
+        {MHz(146), MHz(174), TMD750_MODES_ANALOG, -1, -1, TMD750_VFO},
+        {MHz(410), MHz(430), TMD750_MODES_ANALOG, -1, -1, TMD750_VFO},
+        {MHz(430), MHz(440), TMD750_MODES, -1, -1, TMD750_VFO},
+        {MHz(440), MHz(470), TMD750_MODES_ANALOG, -1, -1, TMD750_VFO},
+        {MHz(174), MHz(410), TMD750_MODES_ANALOG, -1, -1, RIG_VFO_B},
+        {MHz(470), MHz(524), TMD750_MODES_ANALOG, -1, -1, RIG_VFO_B},
         RIG_FRNG_END,
     },
     .tx_range_list1 =
@@ -1877,16 +1876,22 @@ struct rig_caps tmd750_caps =
         {MHz(430), MHz(440), TMD750_MODES_TX, W(5), W(50), TMD750_VFO},
         RIG_FRNG_END,
     },
-    /* TM-D750A */
+    /* TM-D750A. Band B also receives 174-216, 260-410 and 470-524 MHz. */
     .rx_range_list2 =
     {
         {MHz(108), MHz(137), RIG_MODE_AM, -1, -1, TMD750_VFO},
-        {MHz(137), MHz(174), TMD750_MODES, -1, -1, TMD750_VFO},
-        {MHz(216), MHz(260), TMD750_MODES, -1, -1, TMD750_VFO},
-        {MHz(410), MHz(470), TMD750_MODES, -1, -1, TMD750_VFO},
-        {MHz(174), MHz(216), TMD750_MODES, -1, -1, RIG_VFO_B},
-        {MHz(260), MHz(410), TMD750_MODES, -1, -1, RIG_VFO_B},
-        {MHz(470), MHz(524), TMD750_MODES, -1, -1, RIG_VFO_B},
+        {MHz(137), MHz(144), TMD750_MODES_ANALOG, -1, -1, TMD750_VFO},
+        {MHz(144), MHz(148), TMD750_MODES, -1, -1, TMD750_VFO},
+        {MHz(148), MHz(174), TMD750_MODES_ANALOG, -1, -1, TMD750_VFO},
+        {MHz(216), MHz(222), TMD750_MODES_ANALOG, -1, -1, TMD750_VFO},
+        {MHz(222), MHz(225), TMD750_MODES, -1, -1, TMD750_VFO},
+        {MHz(225), MHz(260), TMD750_MODES_ANALOG, -1, -1, TMD750_VFO},
+        {MHz(410), MHz(430), TMD750_MODES_ANALOG, -1, -1, TMD750_VFO},
+        {MHz(430), MHz(450), TMD750_MODES, -1, -1, TMD750_VFO},
+        {MHz(450), MHz(470), TMD750_MODES_ANALOG, -1, -1, TMD750_VFO},
+        {MHz(174), MHz(216), TMD750_MODES_ANALOG, -1, -1, RIG_VFO_B},
+        {MHz(260), MHz(410), TMD750_MODES_ANALOG, -1, -1, RIG_VFO_B},
+        {MHz(470), MHz(524), TMD750_MODES_ANALOG, -1, -1, RIG_VFO_B},
         RIG_FRNG_END,
     },
     .tx_range_list2 =
