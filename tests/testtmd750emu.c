@@ -42,9 +42,12 @@ static const char *fo_initial[2] =
 static const char me_054[] =
     "ME 054,0446475000,0005000000,9,9,0,1,0,0,0,0,0,0,18,18,000,3,CQCQCQ,0,00,1";
 
-/* A split channel: RX 446.475, TX 441.475 in the offset field, split flag set. */
+/*
+ * A cross-band split channel as read from the radio: RX 446.475 on a 25 kHz
+ * step, TX 145.970 in the offset field on a 5 kHz TX step, split flag set.
+ */
 static const char me_055[] =
-    "ME 055,0446475000,0441475000,9,9,0,0,0,0,1,0,1,0,18,18,000,3,CQCQCQ,0,00,0";
+    "ME 055,0446475000,0145970000,9,2,0,0,0,0,1,0,1,0,18,18,000,3,CQCQCQ,0,00,0";
 
 static int send_reply(int fd, const char *reply)
 {
@@ -524,9 +527,10 @@ int main(void)
     failures += expect(rig_get_channel(rig, RIG_VFO_NONE, &channel, 1) == RIG_OK
                        && channel.split == RIG_SPLIT_ON
                        && channel.freq == 446475000
-                       && channel.tx_freq == 441475000
+                       && channel.tx_freq == 145970000
+                       && channel.tuning_step == 25000
                        && channel.rptr_shift == RIG_RPT_SHIFT_NONE,
-                       "read a split memory");
+                       "read a cross-band split memory");
     channel.channel_num = 0;
     failures += expect(rig_get_channel(rig, RIG_VFO_NONE, &channel, 1)
                        == -RIG_ENAVAIL,
