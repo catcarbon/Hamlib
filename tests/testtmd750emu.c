@@ -22,12 +22,7 @@ int main(void)
 #include "hamlib/rig.h"
 
 /*
- * A TM-D750 on a pty. The replies follow the radio's CAT answers: FO and ME
- * without fine-step fields, "BC ctrl,ptt", "MR ccc" without the band, "N" for
- * a refused setting (including MR in VFO mode), "?" for a malformed one, and MD unable to enter or leave
- * DR (4).
- *
- * The test drives radio-side changes (front-panel actions) through a control
+ * TM-D750 emulator on a pty. Front-panel changes reach it through a control
  * pipe, one line per change.
  */
 
@@ -128,6 +123,7 @@ static int emulate(int master, int control)
     int gain[2] = { 100, 100 }, busy[2] = { 0, 1 }, signal[2] = { 0, 7 };
     int vm[2] = { 0, 1 }, mr[2] = { 0, 54 };
     int ctrl = 1, ptt = 0, keyed = 0, vox = 0, vox_gain = 4, vox_delay = 1;
+    int fo_in_memory_mode = 0;
 
     strcpy(memory[54], me_054);
     strcpy(memory[55], me_055);
@@ -202,6 +198,8 @@ static int emulate(int master, int control)
                 long step = steps[code >= 'A' ? 10 + code - 'A' : code - '0'];
                 long long hz = atoll(command + 5);
 
+                /* The backend must leave memory mode before writing FO. */
+                fo_in_memory_mode += vm[band];
                 snprintf(fo[band], sizeof(fo[band]), "FO %d,%010lld%s", band,
                          hz - hz % step, command + 15);
             }
@@ -325,7 +323,13 @@ static int emulate(int master, int control)
     }
 
     close(master);
-    return keyed ? 2 : 0;
+    return keyed ? 2 : (fo_in_memory_mode ? 3 : 0);
+}
+
+/* A command the backend does not cover yet: reported, never a failure. */
+static void placeholder(const char *what)
+{
+    printf("SKIP: %s\n", what);
 }
 
 static int expect(int condition, const char *message)
@@ -612,12 +616,25 @@ int main(void)
     failures += expect(rig_set_ptt(rig, RIG_VFO_A, RIG_PTT_ON) == -RIG_ENTARGET,
                        "follow a PTT band change made on the radio");
 
+    /* Band B is in memory mode here; set_freq must switch it to VFO first. */
+    failures += expect(rig_set_mem(rig, RIG_VFO_B, 54) == RIG_OK
+                       && rig_set_freq(rig, RIG_VFO_B, 445500000) == RIG_OK,
+                       "tune a band that was in memory mode");
+
+    placeholder("DL: single or dual band display");
+    placeholder("RA: attenuator");
+    placeholder("RT: clock");
+    placeholder("TN: built-in TNC mode");
+    placeholder("BE: APRS beacon");
+    placeholder("memory channel names");
+    placeholder("split VFO operation (set_split_vfo)");
+
     rig_close(rig);
     rig_cleanup(rig);
     close(pipefd[1]);
     waitpid(child, &status, 0);
     failures += expect(WIFEXITED(status) && WEXITSTATUS(status) == 0,
-                       "emulator exited cleanly and unkeyed");
+                       "emulator exited cleanly, unkeyed, and no FO was written in memory mode");
 
     if (failures == 0)
     {

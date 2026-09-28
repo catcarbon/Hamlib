@@ -19,19 +19,32 @@
  */
 
 /*
- * The TM-D750 speaks the TH-D74/TH-D75 command set with these differences:
+ * Commands used, with b the band (0 = A, 1 = B). A set command is answered
+ * with its own text, "N" when the radio refuses the value and "?" when it
+ * cannot parse it.
  *
- *  - FO and ME have no fine-step fields after the mode.
- *  - BC takes two bands, "BC ctrl,ptt": the band the front panel operates on
- *    and the band the microphone PTT keys.
- *  - MR answers "MR ccc" without the band, and AG is per band ("AG b,nnn").
- *  - SQ runs 0 (open) to 31, and PC has three levels.
- *  - VM selects VFO (0) or memory (1) mode per band.
+ *  FO b / FO b,<record>   read / set a band's VFO record (layout below).
+ *                         The radio rounds the frequency down to the step.
+ *  ME ccc / ME ccc,<record> / ME ccc,
+ *                         read / write / erase memory channel ccc.
+ *                         Reading an empty channel answers "N".
+ *  MD b / MD b,m          mode: 0 FM, 1 DV, 2 AM, 3 narrow FM, 4 DR.
+ *  VM b / VM b,v          0 VFO mode, 1 memory mode.
+ *  MR b / MR b,ccc        memory channel on a band. The read answers
+ *                         "MR ccc" without the band; the set needs memory mode.
+ *  BC                     "BC ctrl,ptt": the band the front panel operates
+ *                         on and the band the microphone PTT keys.
+ *  TX / RX                key / unkey; TX answers "TX b" with the keyed band.
+ *  BY b                   busy (carrier detect).
+ *  SM b                   S-meter, 0 to 9.
+ *  SQ b / SQ b,n          squelch, 0 (open) to 31.
+ *  PC b / PC b,n          power: 0 high, 1 medium, 2 low.
+ *  AG b / AG b,nnn        volume, 000 to 200, always three digits.
+ *  VX, VG, VD             VOX on/off, gain 0 to 9, delay 0 to 6.
  *
- * Selecting a VFO here never changes BC: this backend addresses a band by
- * number in every command, so the radio's operating and PTT bands stay where
- * the operator put them. PTT is refused unless the radio's PTT band is the
- * requested VFO.
+ * Selecting a VFO here never sends BC: every command names its band, so the
+ * operator's operating and PTT bands stay where they are. PTT is refused
+ * unless the radio's PTT band is the requested VFO.
  */
 
 #include <inttypes.h>
@@ -82,7 +95,10 @@
     .dcs_sql = 1, \
     .flags = 1
 
-/* MD codes; 1 is DV and 4 is DR, both D-STAR. MD refuses anything above 4. */
+/*
+ * For reading MD. DV (1) and DR (4) both read as D-STAR. Setting D-STAR
+ * always sends DV: MD cannot enter or leave DR, so set_mode never sends 4.
+ */
 static rmode_t tmd750_mode_table[KENWOOD_MODE_TABLE_MAX] =
 {
     [0] = RIG_MODE_FM,
@@ -141,37 +157,31 @@ static struct kenwood_priv_caps tmd750_priv_caps =
     .mode_table = tmd750_mode_table,
 };
 
-/*
- * FO b,freq,offset,rxstep,txstep,mode,tone,ctcss,dcs,cross,reverse,shift,
- *    tone_idx,ctcss_idx,dcs_idx,cross_sel,urcall,dsq_type,dsq_code
- *
- * ME adds a split flag between reverse and shift and a lockout flag at the
- * end. On a split channel the offset field holds the TX frequency.
- */
+/* One FO or ME record, fields in the order the radio sends them. */
 struct tmd750_record
 {
-    int is_memory;
-    unsigned int number;        /* band for FO, channel for ME */
-    uint64_t frequency_hz;
-    uint64_t offset_hz;
-    char rx_step;
-    char tx_step;
-    uint8_t mode;
+    int is_memory;              /* not sent: ME record rather than FO */
+    unsigned int number;        /* FO: band, 1 digit; ME: channel, 3 digits */
+    uint64_t frequency_hz;      /* 10 digits */
+    uint64_t offset_hz;         /* 10 digits; ME split channel: TX frequency */
+    char rx_step;               /* step code 0-C; SF reports this one */
+    char tx_step;               /* step code 0-C; only matters on a split ME */
+    uint8_t mode;               /* MD code */
     uint8_t tone_enabled;
     uint8_t ctcss_enabled;
     uint8_t dcs_enabled;
     uint8_t cross_enabled;
     uint8_t reverse_enabled;
-    uint8_t odd_split_enabled;
-    uint8_t shift;
-    uint8_t tone_index;
-    uint8_t ctcss_index;
-    uint8_t dcs_index;
-    uint8_t cross_selector;
+    uint8_t odd_split_enabled;  /* ME only, between reverse and shift */
+    uint8_t shift;              /* 0 none, 1 plus, 2 minus */
+    uint8_t tone_index;         /* 2 digits, kenwood42_ctcss_list */
+    uint8_t ctcss_index;        /* 2 digits, kenwood42_ctcss_list */
+    uint8_t dcs_index;          /* 3 digits, tmd750_dcs_list */
+    uint8_t cross_selector;     /* cross tone type */
     char urcall[TMD750_URCALL_MAX + 1];
     uint8_t digital_squelch_type;
-    uint8_t digital_squelch_code;
-    uint8_t lockout_enabled;
+    uint8_t digital_squelch_code; /* 2 digits; last FO field */
+    uint8_t lockout_enabled;    /* ME only, last field */
 };
 
 struct tmd750_cursor
@@ -613,6 +623,28 @@ static int tmd750_push_fo(RIG *rig, struct tmd750_record *record)
         return retval;
     }
 
+    /*
+     * FO on a band in memory mode changes the VFO but leaves the memory tag on
+     * the display, so put the band in VFO mode first (a no-op if it already is).
+     */
+    {
+        char vm[8], vm_reply[TMD750_BUFSIZE];
+
+        SNPRINTF(vm, sizeof(vm), "VM %u,0", record->number);
+        retval = kenwood_transaction(rig, vm, vm_reply, sizeof(vm_reply));
+
+        if (retval != RIG_OK)
+        {
+            return retval;
+        }
+
+        if (strcmp(vm, vm_reply) != 0)
+        {
+            rig_debug(RIG_DEBUG_ERR, "%s: Unexpected reply '%s'\n", __func__, vm_reply);
+            return -RIG_EPROTO;
+        }
+    }
+
     retval = kenwood_transaction(rig, cmd, reply, sizeof(reply));
 
     if (retval != RIG_OK)
@@ -664,7 +696,6 @@ static int tmd750_get_vfo(RIG *rig, vfo_t *vfo)
 static int tmd750_set_freq(RIG *rig, vfo_t vfo, freq_t freq)
 {
     struct tmd750_record record;
-    uint64_t sent;
     int retval;
 
     if (freq < 0.0 || freq > 9999999999.0)
@@ -679,22 +710,10 @@ static int tmd750_set_freq(RIG *rig, vfo_t vfo, freq_t freq)
         return retval;
     }
 
-    record.frequency_hz = sent = (uint64_t)llround(freq);
-    retval = tmd750_push_fo(rig, &record);
-
-    /*
-     * FO rounds the frequency down to the VFO's step. The echo is what the
-     * radio tuned, and the frontend rereads it after set_freq.
-     */
-    if (retval == RIG_OK && record.frequency_hz != sent)
-    {
-        rig_debug(RIG_DEBUG_WARN, "%s: asked for %" PRIu64 " Hz, radio tuned %" PRIu64 " Hz\n",
-                  __func__, sent, record.frequency_hz);
-    }
-
-    return retval;
+    /* The radio may round down to the step; the frontend rereads the frequency. */
+    record.frequency_hz = (uint64_t)llround(freq);
+    return tmd750_push_fo(rig, &record);
 }
-
 static int tmd750_get_freq(RIG *rig, vfo_t vfo, freq_t *freq)
 {
     struct tmd750_record record;
