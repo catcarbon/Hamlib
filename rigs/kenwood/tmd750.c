@@ -665,6 +665,7 @@ static int tmd750_set_freq(RIG *rig, vfo_t vfo, freq_t freq)
 {
     struct tmd750_record record;
     shortfreq_t step;
+    uint64_t sent;
     int retval;
 
     if (freq < 0.0 || freq > 9999999999.0)
@@ -691,8 +692,17 @@ static int tmd750_set_freq(RIG *rig, vfo_t vfo, freq_t freq)
         freq = round(freq / (double)step) * (double)step;
     }
 
-    record.frequency_hz = (uint64_t)llround(freq);
-    return tmd750_push_fo(rig, &record);
+    record.frequency_hz = sent = (uint64_t)llround(freq);
+    retval = tmd750_push_fo(rig, &record);
+
+    /* The echo is what the radio tuned; the frontend rereads it after set_freq. */
+    if (retval == RIG_OK && record.frequency_hz != sent)
+    {
+        rig_debug(RIG_DEBUG_WARN, "%s: asked for %" PRIu64 " Hz, radio tuned %" PRIu64 " Hz\n",
+                  __func__, sent, record.frequency_hz);
+    }
+
+    return retval;
 }
 
 static int tmd750_get_freq(RIG *rig, vfo_t vfo, freq_t *freq)
