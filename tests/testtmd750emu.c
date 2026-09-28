@@ -443,10 +443,10 @@ int main(void)
     failures += expect(rig_get_ts(rig, RIG_VFO_A, &step) == RIG_OK
                        && step == 5000,
                        "read step code 2 as 5 kHz");
-    failures += expect(rig_set_freq(rig, RIG_VFO_A, 146523000) == RIG_OK
+    failures += expect(rig_set_freq(rig, RIG_VFO_A, 146524995) == RIG_OK
                        && rig_get_freq(rig, RIG_VFO_A, &freq) == RIG_OK
-                       && freq == 146525000,
-                       "round an off-step frequency to the nearest 5 kHz");
+                       && freq == 146520000,
+                       "report the frequency the radio tuned off the step");
     failures += expect(rig_get_ts(rig, RIG_VFO_B, &step) == RIG_OK
                        && step == 25000,
                        "read step code 9 as 25 kHz");

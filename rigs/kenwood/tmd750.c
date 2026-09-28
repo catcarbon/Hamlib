@@ -664,7 +664,6 @@ static int tmd750_get_vfo(RIG *rig, vfo_t *vfo)
 static int tmd750_set_freq(RIG *rig, vfo_t vfo, freq_t freq)
 {
     struct tmd750_record record;
-    shortfreq_t step;
     uint64_t sent;
     int retval;
 
@@ -680,22 +679,13 @@ static int tmd750_set_freq(RIG *rig, vfo_t vfo, freq_t freq)
         return retval;
     }
 
-    /*
-     * FO rounds the frequency down to the VFO's step, as the keypad does.
-     * Round to the nearest step instead, so a frequency just below a step
-     * does not land a whole step lower. 8.33 kHz steps are left to the radio.
-     */
-    step = tmd750_steps[tmd750_step_index(record.rx_step)];
-
-    if (step != 8330)
-    {
-        freq = round(freq / (double)step) * (double)step;
-    }
-
     record.frequency_hz = sent = (uint64_t)llround(freq);
     retval = tmd750_push_fo(rig, &record);
 
-    /* The echo is what the radio tuned; the frontend rereads it after set_freq. */
+    /*
+     * FO rounds the frequency down to the VFO's step. The echo is what the
+     * radio tuned, and the frontend rereads it after set_freq.
+     */
     if (retval == RIG_OK && record.frequency_hz != sent)
     {
         rig_debug(RIG_DEBUG_WARN, "%s: asked for %" PRIu64 " Hz, radio tuned %" PRIu64 " Hz\n",
