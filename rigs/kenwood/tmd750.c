@@ -70,6 +70,7 @@
     .freq = 1, \
     .mode = 1, \
     .width = 1, \
+    .tuning_step = 1, \
     .rptr_shift = 1, \
     .rptr_offs = 1, \
     .funcs = RIG_FUNC_REV, \
@@ -101,6 +102,13 @@ static const rptr_shift_t tmd750_shift_table[3] =
     RIG_RPT_SHIFT_NONE,
     RIG_RPT_SHIFT_PLUS,
     RIG_RPT_SHIFT_MINUS,
+};
+
+/* SF/FO step codes 0-C; 8.33 kHz is for the airband only. */
+static const shortfreq_t tmd750_steps[13] =
+{
+    1000, 2500, 5000, 6250, 8330, 10000, 12500, 15000, 20000, 25000, 30000,
+    50000, 100000
 };
 
 static const int tmd750_voxdelay[7] = { 3, 5, 8, 10, 15, 20, 30 };
@@ -236,7 +244,11 @@ static int tmd750_small(struct tmd750_cursor *cursor, int final,
     return RIG_OK;
 }
 
-/* Step codes are kept as the radio sent them; the D750's step table is not yet mapped. */
+static int tmd750_step_index(char code)
+{
+    return code >= 'A' ? 10 + code - 'A' : code - '0';
+}
+
 static int tmd750_step(struct tmd750_cursor *cursor, char *out)
 {
     const char *value;
@@ -244,7 +256,7 @@ static int tmd750_step(struct tmd750_cursor *cursor, char *out)
 
     if (tmd750_field(cursor, 0, &value, &length) != RIG_OK || length != 1
             || !((value[0] >= '0' && value[0] <= '9')
-                 || (value[0] >= 'A' && value[0] <= 'F')))
+                 || (value[0] >= 'A' && value[0] <= 'C')))
     {
         return -RIG_EPROTO;
     }
@@ -871,6 +883,47 @@ static int tmd750_get_rptr_offs(RIG *rig, vfo_t vfo, shortfreq_t *offs)
     return retval;
 }
 
+static int tmd750_set_ts(RIG *rig, vfo_t vfo, shortfreq_t ts)
+{
+    struct tmd750_record record;
+    int index, retval;
+
+    for (index = 0; index < 13 && tmd750_steps[index] != ts; index++)
+    {
+    }
+
+    if (index == 13)
+    {
+        return -RIG_EINVAL;
+    }
+
+    retval = tmd750_pull_fo(rig, vfo, &record);
+
+    if (retval != RIG_OK)
+    {
+        return retval;
+    }
+
+    record.rx_step = index < 10 ? (char)('0' + index) : (char)('A' + index - 10);
+    record.tx_step = record.rx_step;
+    return tmd750_push_fo(rig, &record);
+}
+
+static int tmd750_get_ts(RIG *rig, vfo_t vfo, shortfreq_t *ts)
+{
+    struct tmd750_record record;
+    int retval;
+
+    retval = tmd750_pull_fo(rig, vfo, &record);
+
+    if (retval == RIG_OK)
+    {
+        *ts = tmd750_steps[tmd750_step_index(record.rx_step)];
+    }
+
+    return retval;
+}
+
 static int tmd750_tone_index(tone_t tone, const tone_t *list, int count)
 {
     for (int i = 0; i < count; i++)
@@ -1285,6 +1338,7 @@ static int tmd750_get_channel(RIG *rig, vfo_t vfo, channel_t *chan,
     chan->freq = (freq_t)record.frequency_hz;
     chan->mode = tmd750_mode_table[record.mode];
     chan->width = tmd750_width_table[record.mode];
+    chan->tuning_step = tmd750_steps[tmd750_step_index(record.rx_step)];
     chan->rptr_shift = tmd750_shift_table[record.shift];
     chan->rptr_offs = (shortfreq_t)record.offset_hz;
     chan->funcs = record.reverse_enabled ? RIG_FUNC_REV : 0;
@@ -1353,10 +1407,14 @@ struct rig_caps tmd750_caps =
         { 0, 999, RIG_MTYPE_MEM, {TMD750_CHANNEL_CAPS}},
         RIG_CHAN_END,
     },
+    /* TM-D750E. Band B also receives 174-410 and 470-524 MHz. */
     .rx_range_list1 =
     {
-        {MHz(136), MHz(174), TMD750_MODES, -1, -1, TMD750_VFO},
+        {MHz(108), MHz(137), RIG_MODE_AM, -1, -1, TMD750_VFO},
+        {MHz(137), MHz(174), TMD750_MODES, -1, -1, TMD750_VFO},
         {MHz(410), MHz(470), TMD750_MODES, -1, -1, TMD750_VFO},
+        {MHz(174), MHz(410), TMD750_MODES, -1, -1, RIG_VFO_B},
+        {MHz(470), MHz(524), TMD750_MODES, -1, -1, RIG_VFO_B},
         RIG_FRNG_END,
     },
     .tx_range_list1 =
@@ -1365,21 +1423,40 @@ struct rig_caps tmd750_caps =
         {MHz(430), MHz(440), TMD750_MODES_TX, W(5), W(50), TMD750_VFO},
         RIG_FRNG_END,
     },
+    /* TM-D750A */
     .rx_range_list2 =
     {
-        {MHz(136), MHz(174), TMD750_MODES, -1, -1, TMD750_VFO},
+        {MHz(108), MHz(137), RIG_MODE_AM, -1, -1, TMD750_VFO},
+        {MHz(137), MHz(174), TMD750_MODES, -1, -1, TMD750_VFO},
+        {MHz(216), MHz(260), TMD750_MODES, -1, -1, TMD750_VFO},
         {MHz(410), MHz(470), TMD750_MODES, -1, -1, TMD750_VFO},
+        {MHz(174), MHz(216), TMD750_MODES, -1, -1, RIG_VFO_B},
+        {MHz(260), MHz(410), TMD750_MODES, -1, -1, RIG_VFO_B},
+        {MHz(470), MHz(524), TMD750_MODES, -1, -1, RIG_VFO_B},
         RIG_FRNG_END,
     },
     .tx_range_list2 =
     {
         {MHz(144), MHz(148), TMD750_MODES_TX, W(5), W(50), TMD750_VFO},
+        {MHz(222), MHz(225), TMD750_MODES_TX, W(5), W(20), TMD750_VFO},
         {MHz(430), MHz(450), TMD750_MODES_TX, W(5), W(50), TMD750_VFO},
         RIG_FRNG_END,
     },
     .tuning_steps =
     {
+        {TMD750_MODES, kHz(1)},
+        {TMD750_MODES, kHz(2.5)},
         {TMD750_MODES, kHz(5)},
+        {TMD750_MODES, kHz(6.25)},
+        {RIG_MODE_AM, Hz(8330)},
+        {TMD750_MODES, kHz(10)},
+        {TMD750_MODES, kHz(12.5)},
+        {TMD750_MODES, kHz(15)},
+        {TMD750_MODES, kHz(20)},
+        {TMD750_MODES, kHz(25)},
+        {TMD750_MODES, kHz(30)},
+        {TMD750_MODES, kHz(50)},
+        {TMD750_MODES, kHz(100)},
         RIG_TS_END,
     },
     .filters =
@@ -1406,6 +1483,8 @@ struct rig_caps tmd750_caps =
     .get_rptr_shift = tmd750_get_rptr_shift,
     .set_rptr_offs = tmd750_set_rptr_offs,
     .get_rptr_offs = tmd750_get_rptr_offs,
+    .set_ts = tmd750_set_ts,
+    .get_ts = tmd750_get_ts,
     .set_ctcss_tone = tmd750_set_ctcss_tone,
     .get_ctcss_tone = tmd750_get_ctcss_tone,
     .set_dcs_code = tmd750_set_dcs_code,
