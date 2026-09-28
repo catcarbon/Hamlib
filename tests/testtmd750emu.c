@@ -194,7 +194,16 @@ static int emulate(int master, int control)
 
             if (command[4] == ',')
             {
-                snprintf(fo[band], sizeof(fo[band]), "%s", command);
+                /* The radio rounds the frequency down to the record's step. */
+                static const long steps[13] = { 1000, 2500, 5000, 6250, 8330, 10000,
+                                                12500, 15000, 20000, 25000, 30000,
+                                                50000, 100000 };
+                char code = command[27];
+                long step = steps[code >= 'A' ? 10 + code - 'A' : code - '0'];
+                long long hz = atoll(command + 5);
+
+                snprintf(fo[band], sizeof(fo[band]), "FO %d,%010lld%s", band,
+                         hz - hz % step, command + 15);
             }
 
             send_reply(master, fo[band]);
@@ -434,6 +443,10 @@ int main(void)
     failures += expect(rig_get_ts(rig, RIG_VFO_A, &step) == RIG_OK
                        && step == 5000,
                        "read step code 2 as 5 kHz");
+    failures += expect(rig_set_freq(rig, RIG_VFO_A, 146523000) == RIG_OK
+                       && rig_get_freq(rig, RIG_VFO_A, &freq) == RIG_OK
+                       && freq == 146525000,
+                       "round an off-step frequency to the nearest 5 kHz");
     failures += expect(rig_get_ts(rig, RIG_VFO_B, &step) == RIG_OK
                        && step == 25000,
                        "read step code 9 as 25 kHz");

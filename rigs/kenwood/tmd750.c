@@ -664,6 +664,7 @@ static int tmd750_get_vfo(RIG *rig, vfo_t *vfo)
 static int tmd750_set_freq(RIG *rig, vfo_t vfo, freq_t freq)
 {
     struct tmd750_record record;
+    shortfreq_t step;
     int retval;
 
     if (freq < 0.0 || freq > 9999999999.0)
@@ -676,6 +677,18 @@ static int tmd750_set_freq(RIG *rig, vfo_t vfo, freq_t freq)
     if (retval != RIG_OK)
     {
         return retval;
+    }
+
+    /*
+     * FO rounds the frequency down to the VFO's step, as the keypad does.
+     * Round to the nearest step instead, so a frequency just below a step
+     * does not land a whole step lower. 8.33 kHz steps are left to the radio.
+     */
+    step = tmd750_steps[tmd750_step_index(record.rx_step)];
+
+    if (step != 8330)
+    {
+        freq = round(freq / (double)step) * (double)step;
     }
 
     record.frequency_hz = (uint64_t)llround(freq);
