@@ -48,8 +48,8 @@
 #include "th.h"
 #include "misc.h"
 
-#define TMD750_MODES (RIG_MODE_FM|RIG_MODE_AM|RIG_MODE_DSTAR)
-#define TMD750_MODES_TX (RIG_MODE_FM|RIG_MODE_DSTAR)
+#define TMD750_MODES (RIG_MODE_FM|RIG_MODE_FMN|RIG_MODE_AM|RIG_MODE_DSTAR)
+#define TMD750_MODES_TX (RIG_MODE_FM|RIG_MODE_FMN|RIG_MODE_DSTAR)
 
 #define TMD750_FUNC_ALL (RIG_FUNC_TONE|RIG_FUNC_TSQL|RIG_FUNC_VOX)
 
@@ -80,12 +80,13 @@
     .dcs_sql = 1, \
     .flags = 1
 
-/* MD codes; 1 is DV and 4 is DR, both D-STAR. 3 is not known. */
+/* MD codes; 1 is DV and 4 is DR, both D-STAR. */
 static rmode_t tmd750_mode_table[KENWOOD_MODE_TABLE_MAX] =
 {
     [0] = RIG_MODE_FM,
     [1] = RIG_MODE_DSTAR,
     [2] = RIG_MODE_AM,
+    [3] = RIG_MODE_FMN,
     [4] = RIG_MODE_DSTAR,
 };
 
@@ -94,6 +95,7 @@ static pbwidth_t tmd750_width_table[5] =
     [0] = 14000,
     [1] = 6000,
     [2] = 9000,
+    [3] = 7000,
     [4] = 6000,
 };
 
@@ -704,6 +706,8 @@ static int tmd750_set_mode(RIG *rig, vfo_t vfo, rmode_t mode, pbwidth_t width)
     case RIG_MODE_DSTAR: kmode = 1; break;
 
     case RIG_MODE_AM: kmode = 2; break;
+
+    case RIG_MODE_FMN: kmode = 3; break;
 
     default:
         rig_debug(RIG_DEBUG_ERR, "%s: unsupported mode %s\n", __func__,
@@ -1462,6 +1466,7 @@ struct rig_caps tmd750_caps =
     .filters =
     {
         {RIG_MODE_FM, kHz(14)},
+        {RIG_MODE_FMN, kHz(7)},
         {RIG_MODE_DSTAR, kHz(6)},
         {RIG_MODE_AM, kHz(9)},
         RIG_FLT_END,
