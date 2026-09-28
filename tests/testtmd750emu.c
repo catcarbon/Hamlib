@@ -269,10 +269,11 @@ static int emulate(int master, int control)
             }
             else if (command[6] == ',')
             {
-                /* A write stores the record, an empty one erases the channel. */
+                /* A write echoes the record; an erase answers "ME ccc", as the radio does. */
                 snprintf(memory[channel], RECORD_MAX, "%s",
                          command[7] == '\0' ? "" : command);
-                send_reply(master, command);
+                snprintf(reply, sizeof(reply), "ME %03d", channel);
+                send_reply(master, command[7] == '\0' ? reply : command);
             }
             else
             {
