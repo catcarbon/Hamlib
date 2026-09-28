@@ -730,8 +730,7 @@ static int tmd750_set_mode(RIG *rig, vfo_t vfo, rmode_t mode, pbwidth_t width)
 
     if (current == 4)
     {
-        rig_debug(RIG_DEBUG_ERR, "%s: the band is in DR mode
-", __func__);
+        rig_debug(RIG_DEBUG_ERR, "%s: the band is in DR mode\n", __func__);
         return -RIG_ERJCTED;
     }
 
