@@ -41,6 +41,8 @@
  *  PC b / PC b,n          power: 0 high, 1 medium, 2 low.
  *  AG b / AG b,nnn        volume, 000 to 200, always three digits.
  *  VX, VG, VD             VOX on/off, gain 0 to 9, delay 0 to 6.
+ *  RA b / RA b,v          attenuator 0 off, 1 on. Reads F until it is
+ *                         first switched, which is off.
  */
 
 #include <inttypes.h>
@@ -65,7 +67,10 @@
 
 #define TMD750_LEVEL_ALL (RIG_LEVEL_RFPOWER|RIG_LEVEL_SQL|RIG_LEVEL_AF|\
                           RIG_LEVEL_VOXGAIN|RIG_LEVEL_VOXDELAY|\
-                          RIG_LEVEL_RAWSTR)
+                          RIG_LEVEL_RAWSTR|RIG_LEVEL_ATT)
+
+/* The attenuator is on or off; Kenwood gives no figure, so "on" reads as this nominal value. */
+#define TMD750_ATT_DB 10
 
 #define TMD750_VFO (RIG_VFO_A|RIG_VFO_B)
 
@@ -1195,7 +1200,7 @@ static int tmd750_nearest_vox_delay(int tenths)
 
 static int tmd750_set_level(RIG *rig, vfo_t vfo, setting_t level, value_t val)
 {
-    if (level != RIG_LEVEL_VOXDELAY
+    if (level != RIG_LEVEL_VOXDELAY && level != RIG_LEVEL_ATT
             && (!isfinite(val.f) || val.f < 0.0f || val.f > 1.0f))
     {
         return -RIG_EINVAL;
@@ -1227,11 +1232,46 @@ static int tmd750_set_level(RIG *rig, vfo_t vfo, setting_t level, value_t val)
 
         return tmd750_set_global(rig, "VD", tmd750_nearest_vox_delay(val.i));
 
+    case RIG_LEVEL_ATT:
+        /* Any nonzero level switches it on; the radio has no level to set. */
+        return tmd750_set_band(rig, vfo, "RA", "%d", val.i != 0);
+
     default:
         rig_debug(RIG_DEBUG_ERR, "%s: unsupported level %s\n", __func__,
                   rig_strlevel(level));
         return -RIG_EINVAL;
     }
+}
+
+static int tmd750_get_att(RIG *rig, vfo_t vfo, int *db)
+{
+    char band, cmd[8], reply[TMD750_BUFSIZE];
+    int retval;
+
+    retval = tmd750_band(rig, vfo, &band);
+
+    if (retval != RIG_OK)
+    {
+        return retval;
+    }
+
+    SNPRINTF(cmd, sizeof(cmd), "RA %c", band);
+    retval = kenwood_transaction(rig, cmd, reply, sizeof(reply));
+
+    if (retval != RIG_OK)
+    {
+        return retval;
+    }
+
+    if (strlen(reply) != 6 || strncmp(reply, cmd, 4) != 0 || reply[4] != ','
+            || (reply[5] != '0' && reply[5] != '1' && reply[5] != 'F'))
+    {
+        rig_debug(RIG_DEBUG_ERR, "%s: Unexpected reply '%s'\n", __func__, reply);
+        return -RIG_EPROTO;
+    }
+
+    *db = reply[5] == '1' ? TMD750_ATT_DB : 0;
+    return RIG_OK;
 }
 
 static int tmd750_get_level(RIG *rig, vfo_t vfo, setting_t level, value_t *val)
@@ -1282,6 +1322,9 @@ static int tmd750_get_level(RIG *rig, vfo_t vfo, setting_t level, value_t *val)
         if (retval == RIG_OK) { val->i = tmd750_voxdelay[value]; }
 
         return retval;
+
+    case RIG_LEVEL_ATT:
+        return tmd750_get_att(rig, vfo, &val->i);
 
     default:
         rig_debug(RIG_DEBUG_ERR, "%s: unsupported level %s\n", __func__,
@@ -1842,7 +1885,7 @@ struct rig_caps tmd750_caps =
     .ctcss_list = kenwood42_ctcss_list,
     .dcs_list = tmd750_dcs_list,
     .preamp = { RIG_DBLST_END, },
-    .attenuator = { RIG_DBLST_END, },
+    .attenuator = { TMD750_ATT_DB, RIG_DBLST_END, },
     .max_rit = Hz(0),
     .max_xit = Hz(0),
     .max_ifshift = Hz(0),

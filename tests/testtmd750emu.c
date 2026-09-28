@@ -122,6 +122,7 @@ static int emulate(int master, int control)
     int mode[2] = { 0, 0 }, power[2] = { 0, 0 }, squelch[2] = { 5, 5 };
     int gain[2] = { 100, 100 }, busy[2] = { 0, 1 }, signal[2] = { 0, 7 };
     int vm[2] = { 0, 1 }, mr[2] = { 0, 54 };
+    char att[2] = { 'F', 'F' };  /* F until first switched */
     int ctrl = 1, ptt = 0, keyed = 0, vox = 0, vox_gain = 4, vox_delay = 1;
     int fo_in_memory_mode = 0;
 
@@ -237,6 +238,26 @@ static int emulate(int master, int control)
                  || band_value(master, command, "AG", gain, 200, "%03d")
                  || band_value(master, command, "VM", vm, 1, "%d"))
         {
+        }
+        else if (strncmp(command, "RA ", 3) == 0 && band_of(command) >= 0)
+        {
+            int band = band_of(command);
+
+            if (command[4] == '\0')
+            {
+                snprintf(reply, sizeof(reply), "RA %d,%c", band, att[band]);
+                send_reply(master, reply);
+            }
+            else if (command[4] == ',' && (command[5] == '0' || command[5] == '1')
+                     && command[6] == '\0')
+            {
+                att[band] = command[5];
+                send_reply(master, command);
+            }
+            else
+            {
+                send_reply(master, "N");
+            }
         }
         else if ((strncmp(command, "BY ", 3) == 0 || strncmp(command, "SM ", 3) == 0)
                  && band_of(command) >= 0 && command[4] == '\0')
@@ -520,6 +541,19 @@ int main(void)
                                         &value) == RIG_OK
                        && value.f == 0.5f,
                        "set band B volume");
+    failures += expect(rig_get_level(rig, RIG_VFO_B, RIG_LEVEL_ATT, &value) == RIG_OK
+                       && value.i == 0,
+                       "read an attenuator never switched (F) as off");
+    failures += expect(rig_set_level(rig, RIG_VFO_B, RIG_LEVEL_ATT,
+                                     (value_t){ .i = 3 }) == RIG_OK
+                       && rig_get_level(rig, RIG_VFO_B, RIG_LEVEL_ATT, &value) == RIG_OK
+                       && value.i == 10,
+                       "any nonzero attenuator level switches it on");
+    failures += expect(rig_set_level(rig, RIG_VFO_B, RIG_LEVEL_ATT,
+                                     (value_t){ .i = 0 }) == RIG_OK
+                       && rig_get_level(rig, RIG_VFO_B, RIG_LEVEL_ATT, &value) == RIG_OK
+                       && value.i == 0,
+                       "switch the attenuator off");
     failures += expect(rig_get_level(rig, RIG_VFO_B, RIG_LEVEL_RAWSTR,
                                      &value) == RIG_OK && value.i == 7,
                        "read band B S-meter");
@@ -621,11 +655,6 @@ int main(void)
                        && rig_set_freq(rig, RIG_VFO_B, 445500000) == RIG_OK,
                        "tune a band that was in memory mode");
 
-    placeholder("DL: single or dual band display");
-    placeholder("RA: attenuator");
-    placeholder("RT: clock");
-    placeholder("TN: built-in TNC mode");
-    placeholder("BE: APRS beacon");
     placeholder("memory channel names");
     placeholder("split VFO operation (set_split_vfo)");
 
