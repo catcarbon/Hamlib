@@ -1336,20 +1336,12 @@ static int tmd750_vfo_op(RIG *rig, vfo_t vfo, vfo_op_t op)
     }
 }
 
-static int tmd750_get_channel(RIG *rig, vfo_t vfo, channel_t *chan,
-                              int read_only)
+static int tmd750_pull_me(RIG *rig, int channel, struct tmd750_record *record)
 {
-    struct tmd750_record record;
     char cmd[16], reply[TMD750_BUFSIZE];
     int retval;
 
-    if (chan->vfo != RIG_VFO_MEM || chan->channel_num < 0
-            || chan->channel_num > 999)
-    {
-        return -RIG_EINVAL;
-    }
-
-    SNPRINTF(cmd, sizeof(cmd), "ME %03d", chan->channel_num);
+    SNPRINTF(cmd, sizeof(cmd), "ME %03d", channel);
     retval = kenwood_transaction(rig, cmd, reply, sizeof(reply));
 
     if (retval != RIG_OK)
@@ -1363,12 +1355,79 @@ static int tmd750_get_channel(RIG *rig, vfo_t vfo, channel_t *chan,
         return -RIG_ENAVAIL;
     }
 
-    if (tmd750_parse(reply, 1, &record) != RIG_OK
-            || record.number != (unsigned int)chan->channel_num
-            || tmd750_mode_table[record.mode] == RIG_MODE_NONE)
+    if (tmd750_parse(reply, 1, record) != RIG_OK
+            || record->number != (unsigned int)channel
+            || tmd750_mode_table[record->mode] == RIG_MODE_NONE)
     {
         rig_debug(RIG_DEBUG_ERR, "%s: Unexpected reply '%s'\n", __func__, reply);
         return -RIG_EPROTO;
+    }
+
+    return RIG_OK;
+}
+
+/*
+ * Cross tone types as on the TH-D75: 0 DCS/Off, 1 Tone/DCS, 2 DCS/CTCSS,
+ * 3 Tone/CTCSS. Only 3 has been read from a TM-D750.
+ */
+static void tmd750_record_tones(const struct tmd750_record *record,
+                                channel_t *chan)
+{
+    tone_t tone = kenwood42_ctcss_list[record->tone_index];
+    tone_t ctcss = kenwood42_ctcss_list[record->ctcss_index];
+    tone_t dcs = tmd750_dcs_list[record->dcs_index];
+
+    chan->ctcss_tone = 0;
+    chan->ctcss_sql = 0;
+    chan->dcs_code = 0;
+    chan->dcs_sql = 0;
+
+    if (record->cross_enabled)
+    {
+        switch (record->cross_selector)
+        {
+        case 0: chan->dcs_code = dcs; break;
+
+        case 1: chan->ctcss_tone = tone; chan->dcs_sql = dcs; break;
+
+        case 2: chan->dcs_code = dcs; chan->ctcss_sql = ctcss; break;
+
+        default: chan->ctcss_tone = tone; chan->ctcss_sql = ctcss; break;
+        }
+    }
+    else if (record->dcs_enabled)
+    {
+        chan->dcs_code = dcs;
+        chan->dcs_sql = dcs;
+    }
+    else if (record->ctcss_enabled)
+    {
+        chan->ctcss_tone = ctcss;
+        chan->ctcss_sql = ctcss;
+    }
+    else if (record->tone_enabled)
+    {
+        chan->ctcss_tone = tone;
+    }
+}
+
+static int tmd750_get_channel(RIG *rig, vfo_t vfo, channel_t *chan,
+                              int read_only)
+{
+    struct tmd750_record record;
+    int retval;
+
+    if (chan->vfo != RIG_VFO_MEM || chan->channel_num < 0
+            || chan->channel_num > 999)
+    {
+        return -RIG_EINVAL;
+    }
+
+    retval = tmd750_pull_me(rig, chan->channel_num, &record);
+
+    if (retval != RIG_OK)
+    {
+        return retval;
     }
 
     chan->freq = (freq_t)record.frequency_hz;
@@ -1377,6 +1436,8 @@ static int tmd750_get_channel(RIG *rig, vfo_t vfo, channel_t *chan,
     chan->tuning_step = tmd750_steps[tmd750_step_index(record.rx_step)];
     chan->rptr_shift = tmd750_shift_table[record.shift];
     chan->rptr_offs = (shortfreq_t)record.offset_hz;
+    chan->split = RIG_SPLIT_OFF;
+    chan->tx_freq = RIG_FREQ_NONE;
 
     if (record.odd_split_enabled)
     {
@@ -1387,14 +1448,329 @@ static int tmd750_get_channel(RIG *rig, vfo_t vfo, channel_t *chan,
         chan->rptr_shift = RIG_RPT_SHIFT_NONE;
         chan->rptr_offs = 0;
     }
+
     chan->funcs = record.reverse_enabled ? RIG_FUNC_REV : 0;
-    chan->ctcss_tone = record.tone_enabled
-                       ? kenwood42_ctcss_list[record.tone_index] : 0;
-    chan->ctcss_sql = record.ctcss_enabled
-                      ? kenwood42_ctcss_list[record.ctcss_index] : 0;
-    chan->dcs_code = record.dcs_enabled ? tmd750_dcs_list[record.dcs_index] : 0;
-    chan->dcs_sql = chan->dcs_code;
+    tmd750_record_tones(&record, chan);
     chan->flags = record.lockout_enabled ? RIG_CHFLAG_SKIP : 0;
+    return RIG_OK;
+}
+
+static int tmd750_serialize_me(const struct tmd750_record *record,
+                               char *output, size_t size)
+{
+    int length;
+
+    if (!record->is_memory || record->number > 999
+            || record->frequency_hz > TMD750_FREQUENCY_MAX
+            || record->offset_hz > TMD750_FREQUENCY_MAX
+            || strchr(record->urcall, ',') != NULL)
+    {
+        return -RIG_EINVAL;
+    }
+
+    length = snprintf(output, size,
+                      "ME %03u,%010" PRIu64 ",%010" PRIu64
+                      ",%c,%c,%u,%u,%u,%u,%u,%u,%u,%u,%02u,%02u,%03u,%u,%s,%u,%02u,%u",
+                      record->number, record->frequency_hz, record->offset_hz,
+                      record->rx_step, record->tx_step,
+                      (unsigned int)record->mode,
+                      (unsigned int)record->tone_enabled,
+                      (unsigned int)record->ctcss_enabled,
+                      (unsigned int)record->dcs_enabled,
+                      (unsigned int)record->cross_enabled,
+                      (unsigned int)record->reverse_enabled,
+                      (unsigned int)record->odd_split_enabled,
+                      (unsigned int)record->shift,
+                      (unsigned int)record->tone_index,
+                      (unsigned int)record->ctcss_index,
+                      (unsigned int)record->dcs_index,
+                      (unsigned int)record->cross_selector,
+                      record->urcall,
+                      (unsigned int)record->digital_squelch_type,
+                      (unsigned int)record->digital_squelch_code,
+                      (unsigned int)record->lockout_enabled);
+
+    return length > 0 && (size_t)length < size ? RIG_OK : -RIG_EINVAL;
+}
+
+/* Turn the channel's tones into the record's flags, indexes and cross type. */
+static int tmd750_channel_tones(const channel_t *chan,
+                                struct tmd750_record *record)
+{
+    int tone = -1, ctcss = -1, dcs_code = -1, dcs_sql = -1;
+    /* Tone/CTCSS cross with one frequency reads back as tone squelch; keep the cross if it was stored so. */
+    int was_cross = record->cross_enabled && record->cross_selector == 3;
+
+    if ((chan->ctcss_tone && (tone = tmd750_tone_index(chan->ctcss_tone, kenwood42_ctcss_list, 42)) < 0)
+            || (chan->ctcss_sql && (ctcss = tmd750_tone_index(chan->ctcss_sql, kenwood42_ctcss_list, 42)) < 0)
+            || (chan->dcs_code && (dcs_code = tmd750_tone_index(chan->dcs_code, tmd750_dcs_list, 104)) < 0)
+            || (chan->dcs_sql && (dcs_sql = tmd750_tone_index(chan->dcs_sql, tmd750_dcs_list, 104)) < 0))
+    {
+        return -RIG_EINVAL;
+    }
+
+    record->tone_enabled = 0;
+    record->ctcss_enabled = 0;
+    record->dcs_enabled = 0;
+    record->cross_enabled = 0;
+
+    if (tone >= 0) { record->tone_index = (uint8_t)tone; }
+
+    if (ctcss >= 0) { record->ctcss_index = (uint8_t)ctcss; }
+
+    if (tone >= 0 && ctcss >= 0 && (ctcss != tone || was_cross)
+            && dcs_code < 0 && dcs_sql < 0)
+    {
+        record->cross_enabled = 1;
+        record->cross_selector = 3;
+    }
+    else if (tone >= 0 && dcs_sql >= 0 && ctcss < 0 && dcs_code < 0)
+    {
+        record->cross_enabled = 1;
+        record->cross_selector = 1;
+        record->dcs_index = (uint8_t)dcs_sql;
+    }
+    else if (dcs_code >= 0 && ctcss >= 0 && tone < 0 && dcs_sql < 0)
+    {
+        record->cross_enabled = 1;
+        record->cross_selector = 2;
+        record->dcs_index = (uint8_t)dcs_code;
+    }
+    else if (dcs_code >= 0 && dcs_sql < 0 && tone < 0 && ctcss < 0)
+    {
+        record->cross_enabled = 1;
+        record->cross_selector = 0;
+        record->dcs_index = (uint8_t)dcs_code;
+    }
+    else if (dcs_sql >= 0 && (dcs_code < 0 || dcs_code == dcs_sql)
+             && tone < 0 && ctcss < 0)
+    {
+        record->dcs_enabled = 1;
+        record->dcs_index = (uint8_t)dcs_sql;
+    }
+    else if (ctcss >= 0 && (tone < 0 || tone == ctcss)
+             && dcs_code < 0 && dcs_sql < 0)
+    {
+        record->ctcss_enabled = 1;
+    }
+    else if (tone >= 0 && ctcss < 0 && dcs_code < 0 && dcs_sql < 0)
+    {
+        record->tone_enabled = 1;
+    }
+    else if (tone >= 0 || ctcss >= 0 || dcs_code >= 0 || dcs_sql >= 0)
+    {
+        return -RIG_EINVAL;
+    }
+
+    return RIG_OK;
+}
+
+static char tmd750_step_code(shortfreq_t step)
+{
+    for (int i = 0; i < 13; i++)
+    {
+        if (tmd750_steps[i] == step)
+        {
+            return i < 10 ? (char)('0' + i) : (char)('A' + i - 10);
+        }
+    }
+
+    return '\0';
+}
+
+/* The step a new channel gets on each band, as the radio's defaults. */
+static char tmd750_default_step(uint64_t frequency_hz)
+{
+    if (frequency_hz >= 216000000 && frequency_hz < 260000000)
+    {
+        return tmd750_step_code(20000);
+    }
+
+    return tmd750_step_code(frequency_hz >= 300000000 ? 25000 : 5000);
+}
+
+static int tmd750_erase_me(RIG *rig, int channel)
+{
+    struct tmd750_record record;
+    char cmd[16], reply[TMD750_BUFSIZE];
+    int retval;
+
+    SNPRINTF(cmd, sizeof(cmd), "ME %03d,", channel);
+    retval = kenwood_transaction(rig, cmd, reply, sizeof(reply));
+
+    if (retval != RIG_OK)
+    {
+        return retval;
+    }
+
+    if (strcmp(reply, "N") == 0 || strcmp(reply, "?") == 0)
+    {
+        return -RIG_ERJCTED;
+    }
+
+    retval = tmd750_pull_me(rig, channel, &record);
+    return retval == -RIG_ENAVAIL ? RIG_OK : (retval == RIG_OK ? -RIG_EPROTO : retval);
+}
+
+static int tmd750_set_channel(RIG *rig, vfo_t vfo, const channel_t *chan)
+{
+    struct tmd750_record record, stored;
+    char cmd[TMD750_BUFSIZE], reply[TMD750_BUFSIZE];
+    int is_new = 0, mode, retval;
+
+    if (chan == NULL || chan->vfo != RIG_VFO_MEM
+            || chan->channel_num < 0 || chan->channel_num > 999)
+    {
+        return -RIG_EINVAL;
+    }
+
+    if (chan->freq == RIG_FREQ_NONE)
+    {
+        return tmd750_erase_me(rig, chan->channel_num);
+    }
+
+    if (!isfinite(chan->freq) || chan->freq <= 0.0 || chan->freq > 9999999999.0
+            || chan->rptr_offs < 0 || chan->channel_desc[0] != '\0'
+            || (chan->funcs & ~RIG_FUNC_REV) != 0
+            || (chan->flags & ~RIG_CHFLAG_SKIP) != 0)
+    {
+        return -RIG_EINVAL;
+    }
+
+    switch (chan->mode)
+    {
+    case RIG_MODE_FM: mode = 0; break;
+
+    case RIG_MODE_DSTAR: mode = 1; break;
+
+    case RIG_MODE_AM: mode = 2; break;
+
+    case RIG_MODE_FMN: mode = 3; break;
+
+    default: return -RIG_EINVAL;
+    }
+
+    if (chan->width != 0 && chan->width != tmd750_width_table[mode])
+    {
+        return -RIG_EINVAL;
+    }
+
+    /* Start from what the channel holds, so fields Hamlib does not model are kept. */
+    retval = tmd750_pull_me(rig, chan->channel_num, &record);
+
+    if (retval == -RIG_ENAVAIL)
+    {
+        memset(&record, 0, sizeof(record));
+        record.is_memory = 1;
+        record.number = (unsigned int)chan->channel_num;
+        record.tone_index = 8;
+        record.ctcss_index = 8;
+        strcpy(record.urcall, "CQCQCQ");
+        is_new = 1;
+    }
+    else if (retval != RIG_OK)
+    {
+        return retval;
+    }
+
+    record.frequency_hz = (uint64_t)llround(chan->freq);
+    record.mode = (uint8_t)mode;
+    record.reverse_enabled = (chan->funcs & RIG_FUNC_REV) != 0;
+    record.lockout_enabled = (chan->flags & RIG_CHFLAG_SKIP) != 0;
+
+    if (chan->tuning_step != 0)
+    {
+        if ((record.rx_step = tmd750_step_code(chan->tuning_step)) == '\0')
+        {
+            return -RIG_EINVAL;
+        }
+    }
+    else if (is_new)
+    {
+        record.rx_step = tmd750_default_step(record.frequency_hz);
+    }
+
+    if (chan->split == RIG_SPLIT_ON)
+    {
+        /* Split channels pair bands only within one band or 144 with 430 MHz. */
+        if (!isfinite(chan->tx_freq) || chan->tx_freq <= 0.0
+                || chan->tx_freq > 9999999999.0
+                || (chan->tx_mode != RIG_MODE_NONE && chan->tx_mode != chan->mode)
+                || (chan->funcs & RIG_FUNC_REV) != 0)
+        {
+            return -RIG_EINVAL;
+        }
+
+        record.odd_split_enabled = 1;
+        record.offset_hz = (uint64_t)llround(chan->tx_freq);
+        record.shift = 0;
+
+        if (is_new || tmd750_default_step(record.offset_hz)
+                != tmd750_default_step(record.frequency_hz))
+        {
+            record.tx_step = tmd750_default_step(record.offset_hz);
+        }
+    }
+    else
+    {
+        record.odd_split_enabled = 0;
+        record.offset_hz = (uint64_t)chan->rptr_offs;
+        record.tx_step = record.rx_step;
+
+        switch (chan->rptr_shift)
+        {
+        case RIG_RPT_SHIFT_NONE: record.shift = 0; break;
+
+        case RIG_RPT_SHIFT_PLUS: record.shift = 1; break;
+
+        case RIG_RPT_SHIFT_MINUS: record.shift = 2; break;
+
+        default: return -RIG_EINVAL;
+        }
+    }
+
+    retval = tmd750_channel_tones(chan, &record);
+
+    if (retval == RIG_OK)
+    {
+        retval = tmd750_serialize_me(&record, cmd, sizeof(cmd));
+    }
+
+    if (retval != RIG_OK)
+    {
+        return retval;
+    }
+
+    retval = kenwood_transaction(rig, cmd, reply, sizeof(reply));
+
+    if (retval != RIG_OK)
+    {
+        return retval;
+    }
+
+    if (strcmp(reply, "N") == 0 || strcmp(reply, "?") == 0)
+    {
+        return -RIG_ERJCTED;
+    }
+
+    /* Read the channel back rather than trusting the reply's format. */
+    retval = tmd750_pull_me(rig, chan->channel_num, &stored);
+
+    if (retval != RIG_OK)
+    {
+        return retval;
+    }
+
+    if (stored.frequency_hz != record.frequency_hz
+            || stored.offset_hz != record.offset_hz
+            || stored.odd_split_enabled != record.odd_split_enabled
+            || stored.mode != record.mode)
+    {
+        rig_debug(RIG_DEBUG_ERR, "%s: channel %03d did not store as sent\n",
+                  __func__, chan->channel_num);
+        return -RIG_EPROTO;
+    }
+
     return RIG_OK;
 }
 
@@ -1546,6 +1922,7 @@ struct rig_caps tmd750_caps =
     .get_mem = tmd750_get_mem,
     .vfo_op = tmd750_vfo_op,
     .get_channel = tmd750_get_channel,
+    .set_channel = tmd750_set_channel,
     .get_info = th_get_info,
     .hamlib_check_rig_caps = HAMLIB_CHECK_RIG_CAPS
 };

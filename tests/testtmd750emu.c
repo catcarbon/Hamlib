@@ -32,6 +32,7 @@ int main(void)
  */
 
 #define RECORD_MAX 160
+#define MEMORIES 100
 
 static const char *fo_initial[2] =
 {
@@ -122,11 +123,14 @@ static int emulate(int master, int control)
 {
     char command[RECORD_MAX], reply[RECORD_MAX];
     char fo[2][RECORD_MAX];
+    static char memory[MEMORIES][RECORD_MAX];
     int mode[2] = { 0, 0 }, power[2] = { 0, 0 }, squelch[2] = { 5, 5 };
     int gain[2] = { 100, 100 }, busy[2] = { 0, 1 }, signal[2] = { 0, 7 };
     int vm[2] = { 0, 1 }, mr[2] = { 0, 54 };
     int ctrl = 1, ptt = 0, keyed = 0, vox = 0, vox_gain = 4, vox_delay = 1;
 
+    strcpy(memory[54], me_054);
+    strcpy(memory[55], me_055);
     strcpy(fo[0], fo_initial[0]);
     strcpy(fo[1], fo_initial[1]);
 
@@ -255,17 +259,25 @@ static int emulate(int master, int control)
                 send_reply(master, reply);
             }
         }
-        else if (strcmp(command, "ME 054") == 0)
+        else if (strncmp(command, "ME ", 3) == 0 && strlen(command) >= 6)
         {
-            send_reply(master, me_054);
-        }
-        else if (strcmp(command, "ME 055") == 0)
-        {
-            send_reply(master, me_055);
-        }
-        else if (strncmp(command, "ME ", 3) == 0 && strlen(command) == 6)
-        {
-            send_reply(master, "N");
+            int channel = atoi(command + 3);
+
+            if (channel < 0 || channel >= MEMORIES)
+            {
+                send_reply(master, "N");
+            }
+            else if (command[6] == ',')
+            {
+                /* A write stores the record, an empty one erases the channel. */
+                snprintf(memory[channel], RECORD_MAX, "%s",
+                         command[7] == '\0' ? "" : command);
+                send_reply(master, command);
+            }
+            else
+            {
+                send_reply(master, memory[channel][0] ? memory[channel] : "N");
+            }
         }
         else if (strcmp(command, "TX") == 0)
         {
@@ -535,6 +547,47 @@ int main(void)
     failures += expect(rig_get_channel(rig, RIG_VFO_NONE, &channel, 1)
                        == -RIG_ENAVAIL,
                        "report an empty memory unavailable");
+
+    memset(&channel, 0, sizeof(channel));
+    channel.vfo = RIG_VFO_MEM;
+    channel.channel_num = 60;
+    channel.freq = 446500000;
+    channel.mode = RIG_MODE_FM;
+    channel.split = RIG_SPLIT_ON;
+    channel.tx_freq = 146520000;
+    channel.ctcss_tone = 1000;
+    failures += expect(rig_set_channel(rig, RIG_VFO_NONE, &channel) == RIG_OK,
+                       "store a new cross-band split memory");
+    memset(&channel, 0, sizeof(channel));
+    channel.vfo = RIG_VFO_MEM;
+    channel.channel_num = 60;
+    failures += expect(rig_get_channel(rig, RIG_VFO_NONE, &channel, 1) == RIG_OK
+                       && channel.freq == 446500000 && channel.split == RIG_SPLIT_ON
+                       && channel.tx_freq == 146520000 && channel.ctcss_tone == 1000
+                       && channel.tuning_step == 25000,
+                       "read the stored split memory back");
+
+    channel.channel_num = 54;
+    failures += expect(rig_get_channel(rig, RIG_VFO_NONE, &channel, 1) == RIG_OK,
+                       "read memory 054 before changing it");
+    channel.funcs = 0;
+    channel.flags = 0;
+    failures += expect(rig_set_channel(rig, RIG_VFO_NONE, &channel) == RIG_OK
+                       && rig_get_channel(rig, RIG_VFO_NONE, &channel, 1) == RIG_OK
+                       && channel.flags == 0 && channel.ctcss_tone == 1230
+                       && channel.freq == 446475000,
+                       "clear lockout on 054 and keep the rest");
+
+    memset(&channel, 0, sizeof(channel));
+    channel.vfo = RIG_VFO_MEM;
+    channel.channel_num = 60;
+    channel.freq = RIG_FREQ_NONE;
+    failures += expect(rig_set_channel(rig, RIG_VFO_NONE, &channel) == RIG_OK,
+                       "erase memory 060");
+    channel.freq = 0;
+    failures += expect(rig_get_channel(rig, RIG_VFO_NONE, &channel, 1)
+                       == -RIG_ENAVAIL,
+                       "memory 060 is empty after the erase");
 
     failures += expect(rig_set_ptt(rig, RIG_VFO_B, RIG_PTT_ON) == -RIG_ENTARGET,
                        "refuse PTT on a band that is not the PTT band");
