@@ -80,7 +80,7 @@
     .dcs_sql = 1, \
     .flags = 1
 
-/* MD codes; 1 is DV and 4 is DR, both D-STAR. */
+/* MD codes; 1 is DV and 4 is DR, both D-STAR. MD refuses anything above 4. */
 static rmode_t tmd750_mode_table[KENWOOD_MODE_TABLE_MAX] =
 {
     [0] = RIG_MODE_FM,
@@ -494,6 +494,11 @@ static int tmd750_set_band(RIG *rig, vfo_t vfo, const char *command,
         return retval;
     }
 
+    if (strcmp(reply, "N") == 0)
+    {
+        return -RIG_ERJCTED;
+    }
+
     return strcmp(cmd, reply) == 0 ? RIG_OK : -RIG_EPROTO;
 }
 
@@ -697,7 +702,7 @@ static int tmd750_get_freq(RIG *rig, vfo_t vfo, freq_t *freq)
 
 static int tmd750_set_mode(RIG *rig, vfo_t vfo, rmode_t mode, pbwidth_t width)
 {
-    int kmode;
+    int current, kmode, retval;
 
     switch (mode)
     {
@@ -713,6 +718,21 @@ static int tmd750_set_mode(RIG *rig, vfo_t vfo, rmode_t mode, pbwidth_t width)
         rig_debug(RIG_DEBUG_ERR, "%s: unsupported mode %s\n", __func__,
                   rig_strrmode(mode));
         return -RIG_EINVAL;
+    }
+
+    /* MD cannot enter or leave DR (MD 4); that is done on the radio. */
+    retval = tmd750_query_band(rig, vfo, "MD", 9, &current);
+
+    if (retval != RIG_OK)
+    {
+        return retval;
+    }
+
+    if (current == 4)
+    {
+        rig_debug(RIG_DEBUG_ERR, "%s: the band is in DR mode
+", __func__);
+        return -RIG_ERJCTED;
     }
 
     return tmd750_set_band(rig, vfo, "MD", "%d", kmode);
