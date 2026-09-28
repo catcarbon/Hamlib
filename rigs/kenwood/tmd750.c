@@ -1261,9 +1261,24 @@ static int tmd750_get_level(RIG *rig, vfo_t vfo, setting_t level, value_t *val)
 
 static int tmd750_set_mem(RIG *rig, vfo_t vfo, int ch)
 {
+    int memory, retval;
+
     if (ch < 0 || ch > 999)
     {
         return -RIG_EINVAL;
+    }
+
+    /* MR answers N unless the band is in memory mode. */
+    retval = tmd750_query_band(rig, vfo, "VM", 1, &memory);
+
+    if (retval == RIG_OK && !memory)
+    {
+        retval = tmd750_set_band(rig, vfo, "VM", "%d", 1);
+    }
+
+    if (retval != RIG_OK)
+    {
+        return retval;
     }
 
     return tmd750_set_band(rig, vfo, "MR", "%03d", ch);

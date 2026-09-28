@@ -24,7 +24,7 @@ int main(void)
 /*
  * A TM-D750 on a pty. The replies follow the radio's CAT answers: FO and ME
  * without fine-step fields, "BC ctrl,ptt", "MR ccc" without the band, "N" for
- * a refused setting, "?" for a malformed one, and MD unable to enter or leave
+ * a refused setting (including MR in VFO mode), "?" for a malformed one, and MD unable to enter or leave
  * DR (4).
  *
  * The test drives radio-side changes (front-panel actions) through a control
@@ -233,7 +233,11 @@ static int emulate(int master, int control)
         {
             int band = band_of(command);
 
-            if (command[4] == ',')
+            if (command[4] == ',' && !vm[band])
+            {
+                send_reply(master, "N");
+            }
+            else if (command[4] == ',')
             {
                 mr[band] = atoi(command + 5);
                 send_reply(master, command);
@@ -494,6 +498,9 @@ int main(void)
                        "select memory channel 047");
     failures += expect(rig_vfo_op(rig, RIG_VFO_B, RIG_OP_TO_VFO) == RIG_OK,
                        "switch band B to VFO mode");
+    failures += expect(rig_set_mem(rig, RIG_VFO_B, 54) == RIG_OK
+                       && rig_get_mem(rig, RIG_VFO_B, &ch) == RIG_OK && ch == 54,
+                       "select a memory from VFO mode");
 
     memset(&channel, 0, sizeof(channel));
     channel.vfo = RIG_VFO_MEM;
