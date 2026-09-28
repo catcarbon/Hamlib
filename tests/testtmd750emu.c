@@ -24,7 +24,8 @@ int main(void)
 /*
  * A TM-D750 on a pty. The replies follow the radio's CAT answers: FO and ME
  * without fine-step fields, "BC ctrl,ptt", "MR ccc" without the band, "N" for
- * a refused setting, and MD unable to enter or leave DR (4).
+ * a refused setting, "?" for a malformed one, and MD unable to enter or leave
+ * DR (4).
  *
  * The test drives radio-side changes (front-panel actions) through a control
  * pipe, one line per change.
@@ -206,6 +207,12 @@ static int emulate(int master, int control)
             {
                 send_reply(master, "N");
             }
+        }
+        else if (strncmp(command, "AG ", 3) == 0 && command[4] == ','
+                 && strlen(command) != 8)
+        {
+            /* AG wants three digits; "AG 1,75" is not understood. */
+            send_reply(master, "?");
         }
         else if (band_value(master, command, "PC", power, 2, "%d")
                  || band_value(master, command, "SQ", squelch, 31, "%d")
