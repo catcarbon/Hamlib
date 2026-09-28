@@ -629,38 +629,34 @@ static int tmd750_push_fo(RIG *rig, struct tmd750_record *record)
     return RIG_OK;
 }
 
-static int tmd750_open(RIG *rig)
-{
-    int ctrl, ptt, retval;
-
-    retval = kenwood_open(rig);
-
-    if (retval != RIG_OK)
-    {
-        return retval;
-    }
-
-    /* Start on the band the radio transmits on. */
-    if (tmd750_get_bands(rig, &ctrl, &ptt) == RIG_OK)
-    {
-        rig_set_current_vfo_state(rig, ptt ? RIG_VFO_B : RIG_VFO_A);
-    }
-
-    return RIG_OK;
-}
-
 static int tmd750_set_vfo(RIG *rig, vfo_t vfo)
 {
     char band;
 
     /* Only checks the VFO; the frontend keeps it as the current VFO. */
-    return tmd750_band(rig, vfo, &band);
+    return vfo == RIG_VFO_CURR ? RIG_OK : tmd750_band(rig, vfo, &band);
 }
 
 static int tmd750_get_vfo(RIG *rig, vfo_t *vfo)
 {
+    int ctrl, ptt, retval;
+
     *vfo = rig_get_current_vfo_state(rig);
-    return RIG_OK;
+
+    if (*vfo == RIG_VFO_A || *vfo == RIG_VFO_B)
+    {
+        return RIG_OK;
+    }
+
+    /* Nothing selected yet: start on the band the radio transmits on. */
+    retval = tmd750_get_bands(rig, &ctrl, &ptt);
+
+    if (retval == RIG_OK)
+    {
+        *vfo = ptt ? RIG_VFO_B : RIG_VFO_A;
+    }
+
+    return retval;
 }
 
 static int tmd750_set_freq(RIG *rig, vfo_t vfo, freq_t freq)
@@ -1494,7 +1490,7 @@ struct rig_caps tmd750_caps =
 
     .rig_init = kenwood_init,
     .rig_cleanup = kenwood_cleanup,
-    .rig_open = tmd750_open,
+    .rig_open = kenwood_open,
     .set_freq = tmd750_set_freq,
     .get_freq = tmd750_get_freq,
     .set_mode = tmd750_set_mode,
