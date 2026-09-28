@@ -68,6 +68,8 @@
 
 #define TMD750_CHANNEL_CAPS \
     .freq = 1, \
+    .tx_freq = 1, \
+    .split = 1, \
     .mode = 1, \
     .width = 1, \
     .tuning_step = 1, \
@@ -143,8 +145,8 @@ static struct kenwood_priv_caps tmd750_priv_caps =
  * FO b,freq,offset,rxstep,txstep,mode,tone,ctcss,dcs,cross,reverse,shift,
  *    tone_idx,ctcss_idx,dcs_idx,cross_sel,urcall,dsq_type,dsq_code
  *
- * ME adds a flag between reverse and shift and a lockout flag at the end.
- * The flag is taken to be odd split, as on the TH-D75.
+ * ME adds a split flag between reverse and shift and a lockout flag at the
+ * end. On a split channel the offset field holds the TX frequency.
  */
 struct tmd750_record
 {
@@ -1375,6 +1377,16 @@ static int tmd750_get_channel(RIG *rig, vfo_t vfo, channel_t *chan,
     chan->tuning_step = tmd750_steps[tmd750_step_index(record.rx_step)];
     chan->rptr_shift = tmd750_shift_table[record.shift];
     chan->rptr_offs = (shortfreq_t)record.offset_hz;
+
+    if (record.odd_split_enabled)
+    {
+        chan->split = RIG_SPLIT_ON;
+        chan->tx_freq = (freq_t)record.offset_hz;
+        chan->tx_mode = chan->mode;
+        chan->tx_width = chan->width;
+        chan->rptr_shift = RIG_RPT_SHIFT_NONE;
+        chan->rptr_offs = 0;
+    }
     chan->funcs = record.reverse_enabled ? RIG_FUNC_REV : 0;
     chan->ctcss_tone = record.tone_enabled
                        ? kenwood42_ctcss_list[record.tone_index] : 0;
