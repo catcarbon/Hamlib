@@ -1438,10 +1438,7 @@ static int tmd750_pull_me(RIG *rig, int channel, struct tmd750_record *record)
     return RIG_OK;
 }
 
-/*
- * Cross tone types as on the TH-D75: 0 DCS/Off, 1 Tone/DCS, 2 DCS/CTCSS,
- * 3 Tone/CTCSS. Only 3 has been read from a TM-D750.
- */
+/* Cross tone types, as on the TH-D75: 0 DCS/Off, 1 Tone/DCS, 2 DCS/CTCSS, 3 Tone/CTCSS. */
 static void tmd750_record_tones(const struct tmd750_record *record,
                                 channel_t *chan)
 {
